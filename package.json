@@ -1,0 +1,18 @@
+{
+  "name": "distributed-file-system",
+  "version": "1.0.0",
+  "description": "A distributed file system with real-time synchronization",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "client": "node client/index.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2",
+    "fs-extra": "^11.1.1"
+  }
+} 
