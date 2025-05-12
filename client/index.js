@@ -12,12 +12,11 @@ class FileSystemClient {
         this.socket = null;
         this.watcher = null;
         this.isInitialSync = true;
-        this.activeOperations = new Set(); // To track ongoing operations and avoid loops
-        
+        this.activeOperations = new Set();
+        this.fileModes = new Map();
         console.log(chalk.blue(`[Client] Initializing with:`));
         console.log(chalk.blue(`  - Server URL: ${this.serverUrl}`));
         console.log(chalk.blue(`  - Local directory: ${this.localDir}`));
-        
         try {
             fs.ensureDirSync(this.localDir);
             console.log(chalk.green(`[Client] Local directory created/verified: ${this.localDir}`));
@@ -84,6 +83,10 @@ class FileSystemClient {
                 console.log(chalk.cyan(`[Client] Ignoring server event for already active local operation: ${operationKey}`));
                 return;
             }
+            if (data.event === 'chmod' && data.mode) {
+                await this.applyChmod(data.path, data.mode);
+                return;
+            }
             await this.handleServerChange(data);
         });
 
@@ -122,8 +125,10 @@ class FileSystemClient {
             console.log(chalk.blue('[Client] chokidar.watch called. Setting up event handlers...'));
 
             this.watcher
-                .on('ready', () => {
+                .on('ready', async () => {
                     console.log(chalk.green('[Client] File watcher is ready and watching.'));
+                    await this.cacheFileModes();
+                    this.startModePolling();
                 })
                 .on('all', (event, filePath) => {
                     console.log(chalk.cyan(`[Client Watcher Raw Event] Event: ${event}, Path: ${filePath}`));
@@ -142,6 +147,17 @@ class FileSystemClient {
         } catch (error) {
             console.error(chalk.red('[Client] CRITICAL ERROR during chokidar.watch setup:'), error);
             if (this.socket) this.socket.disconnect();
+        }
+    }
+    
+    async cacheFileModes() {
+        const files = await this.getLocalFiles();
+        for (const file of files) {
+            const fullPath = path.join(this.localDir, file.path);
+            try {
+                const stat = await fs.stat(fullPath);
+                this.fileModes.set(file.path, stat.mode & 0o777);
+            } catch {}
         }
     }
     
@@ -167,6 +183,7 @@ class FileSystemClient {
         
         try {
             const opData = { path: relativePath };            
+            let stat;
             switch (event) {
                 case 'add':
                 case 'change':
@@ -174,19 +191,30 @@ class FileSystemClient {
                     const content = await fs.readFile(filePath);
                     opData.content = content.toString('base64');
                     opData.encoding = 'base64';
+                    stat = await fs.stat(filePath);
+                    if (this.fileModes.get(relativePath) !== (stat.mode & 0o777)) {
+                        this.fileModes.set(relativePath, stat.mode & 0o777);
+                        this.socket.emit('fileOperation', { operation: 'chmod', path: relativePath, mode: stat.mode & 0o777 });
+                        console.log(chalk.blue(`  - Will send 'chmod' for ${relativePath} to mode ${(stat.mode & 0o777).toString(8)}`));
+                    }
                     console.log(chalk.blue(`  - Will send 'write' for ${relativePath}`));
                     break;
                 case 'unlink':
                     opData.operation = 'delete';
                     console.log(chalk.blue(`  - Will send 'delete' for ${relativePath} (file)`));
+                    this.fileModes.delete(relativePath);
                     break;
                 case 'addDir':
                     opData.operation = 'mkdir';
+                    stat = await fs.stat(filePath);
+                    this.fileModes.set(relativePath, stat.mode & 0o777);
+                    this.socket.emit('fileOperation', { operation: 'chmod', path: relativePath, mode: stat.mode & 0o777 });
                     console.log(chalk.blue(`  - Will send 'mkdir' for ${relativePath}`));
                     break;
                 case 'unlinkDir':
                     opData.operation = 'delete'; // Server handles remove for both files and dirs
                     console.log(chalk.blue(`  - Will send 'delete' for ${relativePath} (directory)`));
+                    this.fileModes.delete(relativePath);
                     break;
                 default:
                     console.log(chalk.yellow(`[Client] Unknown local event type: ${event}. Ignoring.`));
@@ -203,6 +231,17 @@ class FileSystemClient {
         } finally {
             // Release a bit later to give server time to acknowledge and echo back if needed
             setTimeout(() => this.activeOperations.delete(operationKey), 500);
+        }
+    }
+    
+    async applyChmod(relativePath, mode) {
+        const fullPath = path.join(this.localDir, relativePath);
+        try {
+            await fs.chmod(fullPath, mode);
+            this.fileModes.set(relativePath, mode);
+            console.log(chalk.green(`[Client] Applied chmod ${mode.toString(8)} to ${fullPath}`));
+        } catch (error) {
+            console.error(chalk.red(`[Client] Failed to apply chmod ${mode.toString(8)} to ${fullPath}:`), error);
         }
     }
     
@@ -287,6 +326,7 @@ class FileSystemClient {
                  this.activeOperations.delete(operationKey);
             }
         }
+        await this.cacheFileModes();
         console.log(chalk.green('[Client] Initial sync pass for deletions and directory structure complete. File contents are being fetched.'));
     }
     
@@ -312,6 +352,24 @@ class FileSystemClient {
             }
         }
         return items;
+    }
+
+    startModePolling() {
+        setInterval(async () => {
+            const files = await this.getLocalFiles();
+            for (const file of files) {
+                const fullPath = path.join(this.localDir, file.path);
+                try {
+                    const stat = await fs.stat(fullPath);
+                    const currentMode = stat.mode & 0o777;
+                    if (this.fileModes.get(file.path) !== currentMode) {
+                        this.fileModes.set(file.path, currentMode);
+                        this.socket.emit('fileOperation', { operation: 'chmod', path: file.path, mode: currentMode });
+                        console.log(chalk.blue(`[Client] Detected chmod for ${file.path} to mode ${currentMode.toString(8)}`));
+                    }
+                } catch {}
+            }
+        }, 2000);
     }
 }
 

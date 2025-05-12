@@ -116,16 +116,14 @@ class FileSystemServer {
     }
     
     async handleClientOperation(data) {
-        const { operation, path: relativePath, content, newPath } = data;
+        const { operation, path: relativePath, content, newPath, mode } = data;
         const fullPath = path.join(this.watchDir, relativePath);
-        
         console.log(chalk.blue(`[Server Op] Processing client operation: ${operation} on ${relativePath}`));
-        
         try {
             switch (operation) {
                 case 'write':
-                    await fs.ensureDir(path.dirname(fullPath)); // Ensure parent dir exists
-                    await fs.writeFile(fullPath, Buffer.from(content, 'base64')); // Assuming content is base64
+                    await fs.ensureDir(path.dirname(fullPath));
+                    await fs.writeFile(fullPath, Buffer.from(content, 'base64'));
                     console.log(chalk.green(`[Server Op] File written: ${fullPath}`));
                     break;
                 case 'delete':
@@ -141,12 +139,17 @@ class FileSystemServer {
                     await fs.move(fullPath, newFullPath);
                     console.log(chalk.green(`[Server Op] Renamed: ${fullPath} -> ${newFullPath}`));
                     break;
+                case 'chmod':
+                    await fs.chmod(fullPath, mode);
+                    console.log(chalk.green(`[Server Op] Chmod ${mode.toString(8)} applied to ${fullPath}`));
+                    this.io.emit('fileSystemChange', { event: 'chmod', path: relativePath, mode });
+                    break;
                 default:
                     throw new Error(`Unknown client operation: ${operation}`);
             }
         } catch (error) {
             console.error(chalk.red(`[Server Op] Error performing ${operation} on ${relativePath}: ${error.message}`), error);
-            throw error; // Re-throw to be caught by socket handler
+            throw error;
         }
     }
     
