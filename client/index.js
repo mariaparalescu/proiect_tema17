@@ -8,7 +8,7 @@ const chalk = require('chalk');
 class FileSystemClient {
     constructor(serverUrl = 'http://localhost:3000', localDir = './local') {
         this.serverUrl = serverUrl;
-        this.localDir = path.resolve(localDir);
+        this.localDir = path.normalize(path.resolve(localDir));
         this.socket = null;
         this.watcher = null;
         this.isInitialSync = true;
@@ -132,8 +132,7 @@ class FileSystemClient {
                 })
                 .on('all', (event, filePath) => {
                     console.log(chalk.cyan(`[Client Watcher Raw Event] Event: ${event}, Path: ${filePath}`));
-                    if (!filePath) return; // Sometimes path might be undefined for some events
-                    // We will use specific handlers for add, change etc.
+                    if (!filePath) return;
                 })
                 .on('add', (filePath) => this.handleLocalChange('add', filePath))
                 .on('change', (filePath) => this.handleLocalChange('change', filePath))
@@ -212,7 +211,7 @@ class FileSystemClient {
                     console.log(chalk.blue(`  - Will send 'mkdir' for ${relativePath}`));
                     break;
                 case 'unlinkDir':
-                    opData.operation = 'delete'; // Server handles remove for both files and dirs
+                    opData.operation = 'delete';
                     console.log(chalk.blue(`  - Will send 'delete' for ${relativePath} (directory)`));
                     this.fileModes.delete(relativePath);
                     break;
@@ -229,7 +228,7 @@ class FileSystemClient {
                 console.error(chalk.red(`[Client] Error handling local change ${event} for ${relativePath}:`), error);
             }
         } finally {
-            // Release a bit later to give server time to acknowledge and echo back if needed
+
             setTimeout(() => this.activeOperations.delete(operationKey), 500);
         }
     }
@@ -251,12 +250,12 @@ class FileSystemClient {
         console.log(chalk.blue(`[Client] Processing server event: ${event} on ${relativePath}`));
 
         const operationKey = `${event}-${relativePath}`;
-        this.activeOperations.add(operationKey); // Mark that we are handling a server-initiated change
+        this.activeOperations.add(operationKey);
 
         try {
             switch (event) {
-                case 'add': // Server sends 'add' for new files with content
-                case 'change': // Server sends 'change' for modified files with content
+                case 'add':
+                case 'change':
                     if (typeof content !== 'string') {
                         console.error(chalk.red(`[Client] Invalid content received from server for ${relativePath}. Expected base64 string.`));
                         break;
@@ -268,7 +267,7 @@ class FileSystemClient {
                     break;
                 case 'unlink':
                     console.log(chalk.blue(`  - Will delete local file: ${fullPath}`));
-                    await fs.remove(fullPath); // fs-extra remove handles files and empty dirs
+                    await fs.remove(fullPath);
                     console.log(chalk.green(`  - Local file deleted: ${fullPath}`));
                     break;
                 case 'addDir':
@@ -278,7 +277,7 @@ class FileSystemClient {
                     break;
                 case 'unlinkDir':
                     console.log(chalk.blue(`  - Will delete local directory: ${fullPath}`));
-                    await fs.remove(fullPath); // fs-extra remove handles non-empty dirs too
+                    await fs.remove(fullPath);
                     console.log(chalk.green(`  - Local directory deleted: ${fullPath}`));
                     break;
                 default:
@@ -317,11 +316,10 @@ class FileSystemClient {
                 await fs.ensureDir(fullPath);
             } else {
                 console.log(chalk.blue(`  [Sync] Requesting content for server file: ${file.path}`));
-                // Content will be handled by 'fileContent' event from server
+
                 this.socket.emit('requestFileContent', { path: file.path }); 
             }
-            // No immediate delete from activeOperations here for files, as fileContent is async.
-            // For directories, it's synchronous for ensureDir.
+
             if (file.type === 'directory') {
                  this.activeOperations.delete(operationKey);
             }
@@ -347,7 +345,7 @@ class FileSystemClient {
                 }
             }
         } catch (error) {
-            if (error.code !== 'ENOENT') { // Ignore if dir not found (e.g. during cleanup)
+            if (error.code !== 'ENOENT') {
                  console.error(chalk.red(`[FS] Error reading local directory ${currentPath} for getLocalFiles:`), error);
             }
         }

@@ -9,7 +9,7 @@ const chalk = require('chalk');
 class FileSystemServer {
     constructor(port = 3000, watchDir = './shared') {
         this.port = port;
-        this.watchDir = path.resolve(watchDir);
+        this.watchDir = path.normalize(path.resolve(watchDir));
         this.clients = new Set();
         
         console.log(chalk.blue(`Initializing server with:`));
